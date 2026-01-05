@@ -2,9 +2,10 @@ import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
 import plotly.express as px
-import sqlite3 as sql
 import json
-from pull_build import init_database, check_database_populated, full_data_refresh
+from db_build import init_database, get_mysql_connection, check_database_populated, full_data_refresh
+from sheets_pull import load_spreadsheet_data
+from pull_build import parse_percentage, safe_int, safe_float, safe_str, parse_timestamp
 
 st.set_page_config(page_title="Therapist Dashboard", layout="wide")
 
@@ -16,13 +17,14 @@ def get_cached_data():
     return full_data_refresh()
 
 
-# Get available tools from database
+# Get available tools from database (MySQL)
 def get_available_tools():
-    """Get non-excluded sheet names from database"""
-    conn = sql.connect("therapist_dashboard.db")
-    result = conn.execute(
-        "SELECT sheet_name FROM sheet_config WHERE is_excluded = 0 ORDER BY sheet_name"
-    ).fetchall()
+    """Get non-excluded sheet names from database (MySQL)"""
+    conn = get_mysql_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT sheet_name FROM sheet_config WHERE is_excluded = 0 ORDER BY sheet_name")
+    result = cursor.fetchall()
+    cursor.close()
     conn.close()
     return [row[0] for row in result]
 
@@ -31,8 +33,8 @@ def get_available_tools():
 init_database()
 
 # Check if we need to refresh data
-col1, col2 = st.columns([3, 1])
-with col2:
+
+with st.columns(1)[0]:
     if st.button("🔄 Refresh Data"):
         st.cache_data.clear()
         st.rerun()
@@ -56,9 +58,9 @@ available_tools = get_available_tools()
 
 # Get comprehensive therapist client counts across all assessment tools
 def get_therapist_comprehensive_counts():
-    """Get detailed client counts per therapist across all assessment tools"""
-    conn = sql.connect("therapist_dashboard.db")
-    
+    """Get detailed client counts per therapist across all assessment tools (MySQL)"""
+    conn = get_mysql_connection()
+    cursor = conn.cursor()
     query = """
     SELECT 
         c.counsellor_assn as therapist_name,
@@ -80,8 +82,9 @@ def get_therapist_comprehensive_counts():
     GROUP BY c.counsellor_assn
     ORDER BY c.counsellor_assn
     """
-    
-    result = conn.execute(query).fetchall()
+    cursor.execute(query)
+    result = cursor.fetchall()
+    cursor.close()
     conn.close()
     return result
 
@@ -94,31 +97,31 @@ def get_therapist_client_counts():
 
 
 def get_therapist_client_count(therapist_name):
-    """Get total client count for a specific therapist or all therapists"""
-    conn = sql.connect("therapist_dashboard.db")
-    
+    """Get total client count for a specific therapist or all therapists (MySQL)"""
+    conn = get_mysql_connection()
+    cursor = conn.cursor()
     if therapist_name == "All":
-        result = conn.execute(
-            "SELECT COUNT(DISTINCT ID) as total_clients FROM clients WHERE counsellor_assn IS NOT NULL"
-        ).fetchone()
+        cursor.execute("SELECT COUNT(DISTINCT ID) as total_clients FROM clients WHERE counsellor_assn IS NOT NULL")
+        result = cursor.fetchone()
         client_count = result[0] if result else 0
     else:
-        # Use the comprehensive query for specific therapist
         query = """
         SELECT COUNT(DISTINCT c.ID) as total_clients
         FROM clients c
-        WHERE c.counsellor_assn = ? AND c.counsellor_assn IS NOT NULL
+        WHERE c.counsellor_assn = %s AND c.counsellor_assn IS NOT NULL
         """
-        result = conn.execute(query, (therapist_name,)).fetchone()
+        cursor.execute(query, (therapist_name,))
+        result = cursor.fetchone()
         client_count = result[0] if result else 0
-    
+    cursor.close()
     conn.close()
     return client_count
 
 
 def get_therapist_clients_for_tool(therapist_name, tool_name):
     """Get count of clients who have completed a specific assessment tool for a therapist"""
-    conn = sql.connect("therapist_dashboard.db")
+    conn = get_mysql_connection()
+    cursor = conn.cursor()
     
     # Map tool names to their response tables
     tool_table_mapping = {
@@ -152,20 +155,20 @@ def get_therapist_clients_for_tool(therapist_name, tool_name):
             break
     
     if not table_name:
+        cursor.close()
         conn.close()
         return 0
-    
     try:
         if table_name == "clients":
-            # For clients table, count clients assigned to therapist
             if therapist_name == "All":
                 query = "SELECT COUNT(DISTINCT ID) FROM clients WHERE counsellor_assn IS NOT NULL"
-                result = conn.execute(query).fetchone()
+                cursor.execute(query)
+                result = cursor.fetchone()
             else:
-                query = "SELECT COUNT(DISTINCT ID) FROM clients WHERE counsellor_assn = ?"
-                result = conn.execute(query, (therapist_name,)).fetchone()
+                query = "SELECT COUNT(DISTINCT ID) FROM clients WHERE counsellor_assn = %s"
+                cursor.execute(query, (therapist_name,))
+                result = cursor.fetchone()
         else:
-            # For assessment tools, count clients with responses AND match therapist
             if therapist_name == "All":
                 query = f"""
                 SELECT COUNT(DISTINCT r.client_code) 
@@ -173,41 +176,43 @@ def get_therapist_clients_for_tool(therapist_name, tool_name):
                 JOIN clients c ON r.client_code = c.ID 
                 WHERE c.counsellor_assn IS NOT NULL
                 """
-                result = conn.execute(query).fetchone()
+                cursor.execute(query)
+                result = cursor.fetchone()
             else:
                 query = f"""
                 SELECT COUNT(DISTINCT r.client_code) 
                 FROM {table_name} r 
                 JOIN clients c ON r.client_code = c.ID 
-                WHERE c.counsellor_assn = ?
+                WHERE c.counsellor_assn = %s
                 """
-                result = conn.execute(query, (therapist_name,)).fetchone()
-        
+                cursor.execute(query, (therapist_name,))
+                result = cursor.fetchone()
         count = result[0] if result else 0
     except Exception as e:
         count = 0
-    
+    cursor.close()
     conn.close()
     return count
 
 
 def get_clients_filtered():
     """Get filtered client data from database"""
-    conn = sql.connect("therapist_dashboard.db")
-    result = conn.execute(
-        "SELECT ID, counsellor_assn, gender, client_type FROM clients"
-    ).fetchall()
+    conn = get_mysql_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT ID, counsellor_assn, gender, client_type FROM clients")
+    result = cursor.fetchall()
+    cursor.close()
     conn.close()
-
-    return pd.DataFrame(
-        result, columns=["ID", "Counsellor Assn", "Gender", "Client Type"]
-    )
+    return pd.DataFrame(result, columns=["ID", "Counsellor Assn", "Gender", "Client Type"])
 
 
 def get_client_to_therapist_mapping():
     """Get client to therapist mapping from database"""
-    conn = sql.connect("therapist_dashboard.db")
-    result = conn.execute("SELECT ID, counsellor_assn FROM clients").fetchall()
+    conn = get_mysql_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT ID, counsellor_assn FROM clients")
+    result = cursor.fetchall()
+    cursor.close()
     conn.close()
     return {client_id: therapist for client_id, therapist in result}
 
@@ -258,27 +263,24 @@ def get_severity_ranges(tool_name):
 
 def get_tool_data(tool_name):
     """Get data for a specific assessment tool from database with date-based session numbering"""
-    conn = sql.connect("therapist_dashboard.db")
+    conn = get_mysql_connection()
+    cursor = conn.cursor()
 
     try:
         if tool_name == "Clients":
-            result = conn.execute(
-                "SELECT ID, counsellor_assn as 'Counsellor Assn', age as Age, gender as Gender, client_type as 'Client Type', county FROM clients"
-            ).fetchall()
-            df = pd.DataFrame(
-                result,
-                columns=[
-                    "ID",
-                    "Counsellor Assn",
-                    "Age",
-                    "Gender",
-                    "Client Type",
-                    "county",
-                ],
-            )
+            cursor.execute("SELECT ID, counsellor_assn as 'Counsellor Assn', age as Age, gender as Gender, client_type as 'Client Type', county FROM clients")
+            result = cursor.fetchall()
+            df = pd.DataFrame(result, columns=[
+                "ID",
+                "Counsellor Assn",
+                "Age",
+                "Gender",
+                "Client Type",
+                "county",
+            ])
 
         elif "EPDS" in tool_name:
-            result = conn.execute(
+            cursor.execute(
                 """
                 SELECT 
                     timestamp as Timestamp, 
@@ -292,23 +294,21 @@ def get_tool_data(tool_name):
                 FROM epds_responses 
                 ORDER BY client_code, timestamp
             """
-            ).fetchall()
-            df = pd.DataFrame(
-                result,
-                columns=[
-                    "Timestamp",
-                    "Client Code",
-                    "EPDS Total Score (Max 30)",
-                    "Severity Descriptor",
-                    "Item 10 (Harming Self) Raw Score",
-                    "Suicidality Flag (Clinical Alert)",
-                    "Column 1",
-                    "Session Number",
-                ],
             )
+            result = cursor.fetchall()
+            df = pd.DataFrame(result, columns=[
+                "Timestamp",
+                "Client Code",
+                "EPDS Total Score (Max 30)",
+                "Severity Descriptor",
+                "Item 10 (Harming Self) Raw Score",
+                "Suicidality Flag (Clinical Alert)",
+                "Column 1",
+                "Session Number",
+            ])
 
         elif "BDI" in tool_name:
-            result = conn.execute(
+            cursor.execute(
                 """
                 SELECT 
                     timestamp as Timestamp, 
@@ -320,21 +320,19 @@ def get_tool_data(tool_name):
                 FROM bdi_responses 
                 ORDER BY client_code, timestamp
             """
-            ).fetchall()
-            df = pd.DataFrame(
-                result,
-                columns=[
-                    "Timestamp",
-                    "Client Code",
-                    "BDI Total",
-                    "Severity Level",
-                    "Clinical Interpretation",
-                    "Session Number",
-                ],
             )
+            result = cursor.fetchall()
+            df = pd.DataFrame(result, columns=[
+                "Timestamp",
+                "Client Code",
+                "BDI Total",
+                "Severity Level",
+                "Clinical Interpretation",
+                "Session Number",
+            ])
 
         elif "BAI" in tool_name:
-            result = conn.execute(
+            cursor.execute(
                 """
                 SELECT 
                     timestamp as Timestamp, 
@@ -346,21 +344,19 @@ def get_tool_data(tool_name):
                 FROM bai_responses 
                 ORDER BY client_code, timestamp
             """
-            ).fetchall()
-            df = pd.DataFrame(
-                result,
-                columns=[
-                    "Timestamp",
-                    "Client Code",
-                    "Total Score",
-                    "Severity",
-                    "Clinical Conclusion ",
-                    "Session Number",
-                ],
             )
+            result = cursor.fetchall()
+            df = pd.DataFrame(result, columns=[
+                "Timestamp",
+                "Client Code",
+                "Total Score",
+                "Severity",
+                "Clinical Conclusion ",
+                "Session Number",
+            ])
 
         elif "ACE-Q" in tool_name:
-            result = conn.execute(
+            cursor.execute(
                 """
                 SELECT 
                     timestamp as Timestamp, 
@@ -370,19 +366,17 @@ def get_tool_data(tool_name):
                 FROM aceq_responses 
                 ORDER BY client_code, timestamp
             """
-            ).fetchall()
-            df = pd.DataFrame(
-                result,
-                columns=[
-                    "Timestamp",
-                    "Client Code",
-                    "Total ACE Score",
-                    "Session Number",
-                ],
             )
+            result = cursor.fetchall()
+            df = pd.DataFrame(result, columns=[
+                "Timestamp",
+                "Client Code",
+                "Total ACE Score",
+                "Session Number",
+            ])
 
         elif "SADS" in tool_name:
-            result = conn.execute(
+            cursor.execute(
                 """
                 SELECT 
                     timestamp as Timestamp, 
@@ -397,24 +391,22 @@ def get_tool_data(tool_name):
                 FROM sads_responses 
                 ORDER BY client_code, timestamp
             """
-            ).fetchall()
-            df = pd.DataFrame(
-                result,
-                columns=[
-                    "Timestamp",
-                    "Client Code",
-                    "Social Avoidance Score",
-                    "Social Avoidance Level",
-                    "Social Distress Score",
-                    "Social Distress Level",
-                    "Total SADS Score",
-                    "Overall Level",
-                    "Session Number",
-                ],
             )
+            result = cursor.fetchall()
+            df = pd.DataFrame(result, columns=[
+                "Timestamp",
+                "Client Code",
+                "Social Avoidance Score",
+                "Social Avoidance Level",
+                "Social Distress Score",
+                "Social Distress Level",
+                "Total SADS Score",
+                "Overall Level",
+                "Session Number",
+            ])
 
         elif "ASRS" in tool_name:
-            result = conn.execute(
+            cursor.execute(
                 """
                 SELECT 
                     timestamp as Timestamp, 
@@ -435,27 +427,25 @@ def get_tool_data(tool_name):
                 FROM asrs_responses 
                 ORDER BY client_code, timestamp
             """
-            ).fetchall()
-            df = pd.DataFrame(
-                result,
-                columns=[
-                    "Timestamp",
-                    "Client Code",
-                    "Part A Score",
-                    "Part A Descriptor",
-                    "Part B Score",
-                    "Part B Descriptor",
-                    "Total Score",
-                    "Total Descriptor",
-                    "Inattentive Subscale (Raw)",
-                    "Inattentive Subscale (%)",
-                    "Hyperactivity-Motor Subscale (Raw)",
-                    "Hyperactivity-Motor Subscale (%)",
-                    "Hyperactivity-Verbal Subscale (Raw)",
-                    "Hyperactivity-Verbal Subscale (%)",
-                    "Session Number",
-                ],
             )
+            result = cursor.fetchall()
+            df = pd.DataFrame(result, columns=[
+                "Timestamp",
+                "Client Code",
+                "Part A Score",
+                "Part A Descriptor",
+                "Part B Score",
+                "Part B Descriptor",
+                "Total Score",
+                "Total Descriptor",
+                "Inattentive Subscale (Raw)",
+                "Inattentive Subscale (%)",
+                "Hyperactivity-Motor Subscale (Raw)",
+                "Hyperactivity-Motor Subscale (%)",
+                "Hyperactivity-Verbal Subscale (Raw)",
+                "Hyperactivity-Verbal Subscale (%)",
+                "Session Number",
+            ])
 
         else:
             df = pd.DataFrame()
@@ -468,8 +458,8 @@ def get_tool_data(tool_name):
         st.error(f"Error loading {tool_name}: {e}")
         df = pd.DataFrame()
     finally:
+        cursor.close()
         conn.close()
-
     return df
 
 
@@ -514,7 +504,8 @@ with st.expander("View detailed client counts per assessment tool"):
     else:
         st.info("No comprehensive data available yet.")
 
-st.write(available_tools)
+with st.expander("Available tools"):
+    st.write(available_tools)
 
 st.header("📋 Assessment Tool Details")
 
@@ -528,12 +519,13 @@ if therapist_client_counts:
         key="global_therapist_selection",
     )
 
-# Create tabs for each tool
-if available_tools:
-    tabs = st.tabs(available_tools)
 
-    for tab, tool_name in zip(tabs, available_tools):
-        with tab:
+# Show all tool visuals in their own containers (not in tabs)
+if available_tools:
+    for tool_name in available_tools:
+        with st.container():
+            st.divider()
+            st.subheader(f"🛠️ {tool_name} Data")
             # Load data from database (works for both cached and fresh data)
             df = get_tool_data(tool_name)
 
@@ -541,39 +533,31 @@ if available_tools:
                 st.warning(f"No data available for {tool_name}")
                 continue
 
-            # Display column info for debugging
             st.caption(f"Available columns: {', '.join(df.columns.tolist())}")
 
             # Get therapist info from the db
             if "Client Code" in df.columns and "Counsellor Assn" not in df.columns:
-                # Get client-to-therapist mapping from database
                 client_to_therapist = get_client_to_therapist_mapping()
-                # Add therapist column to the dataframe
                 df["Counsellor Assn"] = df["Client Code"].map(client_to_therapist)
                 therapist_col = "Counsellor Assn"
             else:
-                # Regular case - look for existing therapist column
                 therapist_col = (
                     "Counsellor Assn" if "Counsellor Assn" in df.columns else None
                 )
 
             if therapist_col:
-                # Filter data by globally selected therapist
                 if selected_therapist == "All":
                     filtered_df = df
                 else:
                     filtered_df = df[df[therapist_col] == selected_therapist]
 
-                # Display metrics and visualizations
                 st.subheader(f"{tool_name} - {selected_therapist}")
 
-                # Find score columns (numeric columns)
                 score_cols = filtered_df.select_dtypes(
                     include=["number"]
                 ).columns.tolist()
 
                 if score_cols:
-                    # Find client column for unique client count
                     if "Client Code" in filtered_df.columns:
                         client_col = "Client Code"
                     elif "Client" in filtered_df.columns:
@@ -582,11 +566,7 @@ if available_tools:
                         client_col = "ID"
                     else:
                         client_col = None
-                    
 
-                # Add interactive trajectory visualization
-
-                # Check if we have the necessary columns for trajectory analysis
                 if "Client Code" in filtered_df.columns:
                     client_col = "Client Code"
                 elif "Client" in filtered_df.columns:
@@ -597,10 +577,8 @@ if available_tools:
                     client_col = None
 
                 if client_col and "Session Number" in filtered_df.columns:
-                    # Use the Session Number from SQL query (date-based ordering)
                     viz_df = filtered_df.copy()
 
-                    # Let user select score column for visualization
                     if score_cols:
                         selected_score = st.selectbox(
                             "Select score to visualize",
@@ -612,10 +590,8 @@ if available_tools:
                             # Create interactive Plotly figure
                             fig = go.Figure()
 
-                            # Get severity ranges for shaded areas
                             severity_ranges = get_severity_ranges(tool_name)
 
-                            # Add severity shaded areas
                             if severity_ranges:
                                 max_session = viz_df["Session Number"].max()
                                 for severity_name, (
@@ -634,7 +610,6 @@ if available_tools:
                                         layer="below",
                                         line_width=0,
                                     )
-                                    # Add severity label
                                     fig.add_annotation(
                                         x=max_session + 0.7,
                                         y=(min_val + max_val) / 2,
@@ -646,7 +621,6 @@ if available_tools:
                                         borderwidth=1,
                                     )
 
-                            # Plot individual client trajectories
                             colors = px.colors.qualitative.Set3
                             for i, client in enumerate(viz_df[client_col].unique()):
                                 client_data = viz_df[
@@ -674,7 +648,7 @@ if available_tools:
                                         )
                                     )
 
-                            # Calculate and plot average trajectory
+                            # Calculate and plot average trajectory (line style to be updated next)
                             if len(viz_df[client_col].unique()) > 1:
                                 avg_trajectory = (
                                     viz_df.groupby("Session Number")[selected_score]
@@ -688,8 +662,8 @@ if available_tools:
                                             y=avg_trajectory[selected_score],
                                             mode="lines+markers",
                                             name="Average",
-                                            line=dict(width=4, color="red"),
-                                            marker=dict(size=12, color="red"),
+                                            line=dict(width=4, color="grey", dash="dot"),
+                                            marker=dict(size=12, color="grey"),
                                             hovertemplate="<b>Average</b><br>"
                                             + "<b>Session:</b> %{x}<br>"
                                             + "<b>"
@@ -699,7 +673,6 @@ if available_tools:
                                         )
                                     )
 
-                            # Customize layout
                             fig.update_layout(
                                 title=f"{selected_score} Trajectories - {selected_therapist}",
                                 xaxis_title="Session Number",
@@ -716,8 +689,6 @@ if available_tools:
                                 ),
                             )
 
-
-                            # Set X-axis to show integer session numbers
                             fig.update_xaxes(
                                 dtick=1,
                                 range=[0.5, viz_df["Session Number"].max() + 0.5],
@@ -725,7 +696,6 @@ if available_tools:
 
                             st.plotly_chart(fig, width="stretch")
 
-                            # Show trajectory statistics
                             if len(viz_df[client_col].unique()) > 1:
                                 avg_trajectory = (
                                     viz_df.groupby("Session Number")[selected_score]
@@ -754,7 +724,6 @@ if available_tools:
                         "Session data with proper numbering not available for trajectory analysis."
                     )
 
-                # Display full data table
                 st.subheader("Client Data")
                 st.dataframe(filtered_df, width="content")
             else:
