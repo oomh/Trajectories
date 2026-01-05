@@ -10,3 +10,27 @@ wheels/
 .venv
 secrets.toml
 therapist_dashboard.db
+
+# MySQL setup artifacts
+setup_mysql_local.sh
+populate_mysql.py
+
+# OS-specific files
+.DS_Store
+Thumbs.db
+
+# Editor/project files
+.vscode/
+.idea/
+
+# Log files
+*.log
+
+# Jupyter and notebook files
+*.ipynb
+
+# Environment files
+.env
+
+# Node/npm artifacts (if any)
+node_modules/
