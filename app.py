@@ -6,6 +6,7 @@ import json
 from db_build import init_database, get_mysql_connection, check_database_populated, full_data_refresh
 from sheets_pull import load_spreadsheet_data
 from pull_build import parse_percentage, safe_int, safe_float, safe_str, parse_timestamp
+from streamlit_extras.bottom_container import bottom 
 
 st.set_page_config(page_title="Therapist Dashboard", layout="wide")
 
@@ -507,17 +508,21 @@ with st.expander("View detailed client counts per assessment tool"):
 with st.expander("Available tools"):
     st.write(available_tools)
 
-st.header("📋 Assessment Tool Details")
+# st.header("📋 Assessment Tool Details")
 
-# Global therapist selection
-selected_therapist = "All"
-if therapist_client_counts:
-    all_therapists = [therapist for therapist, count in therapist_client_counts]
-    selected_therapist = st.selectbox(
-        "🧑⚕️ Select Therapist (applies to all tools)",
-        options=["All"] + all_therapists,
-        key="global_therapist_selection",
-    )
+
+with bottom():
+    coll1, col2, col3 = st.columns([1, 2, 1])
+    # Global therapist selection
+    with col2:
+        selected_therapist = "All"
+        if therapist_client_counts:
+            all_therapists = [therapist for therapist, count in therapist_client_counts]
+            selected_therapist = st.selectbox(
+                "🧑⚕️ Select Therapist (applies to all tools)",
+                options=["All"] + all_therapists,
+                key="global_therapist_selection",
+            )
 
 
 # Show all tool visuals in their own containers (not in tabs)
