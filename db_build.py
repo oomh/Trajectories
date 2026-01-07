@@ -141,7 +141,6 @@ def populate_database_with_sheets(sheets_data):
     cursor = conn.cursor()
 
     # Clear existing data
-    cursor.execute("DELETE FROM clients")
     cursor.execute("DELETE FROM epds_responses")
     cursor.execute("DELETE FROM bdi_responses")
     cursor.execute("DELETE FROM bai_responses")
@@ -149,6 +148,8 @@ def populate_database_with_sheets(sheets_data):
     cursor.execute("DELETE FROM sads_responses")
     cursor.execute("DELETE FROM asrs_responses")
     cursor.execute("DELETE FROM sheet_config")
+    cursor.execute("DELETE FROM clients")
+
 
     # Sheet name to table name mapping
     sheet_table_mapping = {

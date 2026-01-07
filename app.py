@@ -38,7 +38,7 @@ init_database()
 with st.columns(1)[0]:
     if st.button("🔄 Refresh Data"):
         st.cache_data.clear()
-        st.rerun()
+        full_data_refresh()
 
 # Load data (cached or fresh)
 if check_database_populated():
