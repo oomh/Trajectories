@@ -12,7 +12,7 @@ secrets.toml
 therapist_dashboard.db
 
 # MySQL setup artifacts
-setup_mysql_local.sh
+# setup_mysql_local.sh
 populate_mysql.py
 
 # OS-specific files

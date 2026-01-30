@@ -27,7 +27,7 @@ def get_available_tools():
     result = cursor.fetchall()
     cursor.close()
     conn.close()
-    return [row[0] for row in result]
+    return [row[0] for row in result] # type: ignore
 
 
 # Initialize database
@@ -94,7 +94,7 @@ def get_therapist_client_counts():
     """Get basic therapist client counts for grid display (backwards compatibility)"""
     comprehensive_data = get_therapist_comprehensive_counts()
     # Return just therapist name and total count for grid compatibility
-    return [(row[0], row[1]) for row in comprehensive_data]
+    return [(therapist_name, total_clients) for therapist_name, total_clients, *_ in comprehensive_data]
 
 
 def get_therapist_client_count(therapist_name):
@@ -104,7 +104,7 @@ def get_therapist_client_count(therapist_name):
     if therapist_name == "All":
         cursor.execute("SELECT COUNT(DISTINCT ID) as total_clients FROM clients WHERE counsellor_assn IS NOT NULL")
         result = cursor.fetchone()
-        client_count = result[0] if result else 0
+        client_count = result[0] if result else 0 # type: ignore
     else:
         query = """
         SELECT COUNT(DISTINCT c.ID) as total_clients
@@ -113,7 +113,7 @@ def get_therapist_client_count(therapist_name):
         """
         cursor.execute(query, (therapist_name,))
         result = cursor.fetchone()
-        client_count = result[0] if result else 0
+        client_count = result[0] if result else 0 # type: ignore
     cursor.close()
     conn.close()
     return client_count
@@ -188,7 +188,7 @@ def get_therapist_clients_for_tool(therapist_name, tool_name):
                 """
                 cursor.execute(query, (therapist_name,))
                 result = cursor.fetchone()
-        count = result[0] if result else 0
+        count = result[0] if result else 0 # type: ignore
     except Exception as e:
         count = 0
     cursor.close()
@@ -510,9 +510,10 @@ with st.expander("Available tools"):
 
 # st.header("📋 Assessment Tool Details")
 
-
+# col1, col2, col3 = st.columns([1, 2, 1])
+# with col2:
 with bottom():
-    coll1, col2, col3 = st.columns([1, 2, 1])
+    col1, col2, col3 = st.columns([1, 2, 1])
     # Global therapist selection
     with col2:
         selected_therapist = "All"
@@ -525,12 +526,12 @@ with bottom():
             )
 
 
-# Show all tool visuals in their own containers (not in tabs)
+# Show all tool visuals in their own containers
 if available_tools:
     for tool_name in available_tools:
         with st.container():
             st.divider()
-            st.subheader(f"🛠️ {tool_name} Data")
+            # st.subheader(f"🛠️ {tool_name} Data")
             # Load data from database (works for both cached and fresh data)
             df = get_tool_data(tool_name)
 
