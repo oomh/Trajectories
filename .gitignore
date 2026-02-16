@@ -24,7 +24,7 @@ Thumbs.db
 
 # Jupyter and notebook files
 *.ipynb
-CLOUD_DEPLOYMENT.md
+deploy.md
 
 # Environment files
 .env
