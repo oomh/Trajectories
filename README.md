@@ -1,5 +1,7 @@
 # Therapist Dashboard
 
+<https://trajectories.streamlit.app/>
+
 A Streamlit dashboard for Mental 360 therapists to view their clients' score trajectories on standardised mental health outcome measures. Data is sourced directly from Google Sheets.
 
 ## Features
