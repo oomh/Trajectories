@@ -11,10 +11,6 @@ wheels/
 secrets.toml
 therapist_dashboard.db
 
-# MySQL setup artifacts
-setup_mysql_local.sh
-populate_mysql.py
-
 # OS-specific files
 .DS_Store
 Thumbs.db
@@ -28,6 +24,7 @@ Thumbs.db
 
 # Jupyter and notebook files
 *.ipynb
+CLOUD_DEPLOYMENT.md
 
 # Environment files
 .env

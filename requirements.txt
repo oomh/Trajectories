@@ -1,22 +1,15 @@
 # Core dependencies
-streamlit>=1.51.0
-streamlit-extras>=0.6.0
-pandas>=2.3.3
-plotly>=6.4.0
-gspread>=5.12.4
-google-auth>=2.43.0
-google-auth-httplib2>=0.2.1
-google-auth-oauthlib>=1.2.2
-st-gsheets-connection>=0.1.0
-mysql-connector-python
+streamlit>=1.28.0
+streamlit-extras>=0.3.0
+pandas>=2.0.0
+plotly>=5.0.0
+gspread>=5.12.0
+google-auth>=2.25.0
+google-auth-httplib2>=0.2.0
+google-auth-oauthlib>=1.2.0
 
-# Optional/utility packages
-notebook
-jupyter
-python-dotenv
-
-# For logging and debugging
-loguru
+# Optional utilities
+python-dotenv>=1.0.0
 
 # For deployment and compatibility
 pyarrow
