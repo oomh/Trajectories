@@ -12,19 +12,18 @@ from sheets_data import (
     get_available_tools,
     get_therapist_list,
     get_clients_for_therapist,
-    get_therapist_comprehensive_counts
+    get_tool_summary_counts
 )
 
 st.set_page_config(page_title="Therapist Dashboard", layout="wide")
 
 # Header with refresh button
-col1, col2 = st.columns([0.9, 0.1])
-with col1:
-    st.title("🩺 Therapist Dashboard")
-    st.markdown("View client progress across assessment tools")
-    if st.button("🔄 Refresh", key="refresh_button", help="Refresh data from Google Sheets"):
-        st.cache_data.clear()
-        st.rerun()
+
+st.title("🩺 Therapist Dashboard")
+st.markdown("View client progress across assessment tools")
+if st.button("🔄 Refresh", key="refresh_button", help="Refresh data from Google Sheets"):
+    st.cache_data.clear()
+    st.rerun()
 
 # Load data
 with st.spinner("Loading data from Google Sheets..."):
@@ -114,51 +113,27 @@ def get_severity_ranges(tool_name):
 
 
 # Display comprehensive tool breakdown
-with st.expander("View detailed client counts per assessment tool"):
-    comprehensive_data = get_therapist_comprehensive_counts(all_sheets)
-    
-    if comprehensive_data:
-        # Create display data
-        display_data = []
-        for item in comprehensive_data:
-            row = {
-                "Therapist": item['therapist'],
-                "Total Clients": item['total_clients'],
-            }
-            for tool, count in item['tool_counts'].items():
-                # Extract tool short name
-                if 'EPDS' in tool:
-                    row['EPDS'] = count
-                elif 'BDI' in tool:
-                    row['BDI'] = count
-                elif 'BAI' in tool:
-                    row['BAI'] = count
-                elif 'ACE-Q' in tool:
-                    row['ACE-Q'] = count
-                elif 'SADS' in tool:
-                    row['SADS'] = count
-                elif 'ASRS' in tool:
-                    row['ASRS'] = count
-            display_data.append(row)
-        
-        df_comprehensive = pd.DataFrame(display_data)
-        st.dataframe(df_comprehensive, width="stretch")
-        
-        # Summary statistics
-        col1, col2, col3, col4 = st.columns(4)
+with st.expander("View detailed counts per assessment tool"):
+    from sheets_data import get_tool_summary_counts
+    tool_summary = get_tool_summary_counts(all_sheets)
+
+    if tool_summary:
+        df_summary = pd.DataFrame(tool_summary).rename(columns={
+            'tool': 'Tool',
+            'total_entries': 'Total Entries',
+            'unique_clients': 'Unique Clients',
+        })
+        st.dataframe(df_summary, width="stretch", hide_index=True)
+
+        col1, col2, col3 = st.columns(3)
         with col1:
-            st.metric("Total Therapists", len(df_comprehensive))
+            st.metric("Total Entries (all tools)", int(df_summary['Total Entries'].sum()))
         with col2:
-            st.metric("Total Clients", df_comprehensive["Total Clients"].sum())
+            st.metric("Unique Clients (all tools)", int(df_summary['Unique Clients'].max()))
         with col3:
-            st.metric("Avg Clients/Therapist", f"{df_comprehensive['Total Clients'].mean():.1f}")
-        with col4:
-            # Count total assessments
-            tool_cols = ['EPDS', 'BDI', 'BAI', 'ACE-Q', 'SADS', 'ASRS']
-            total_assessments = sum(df_comprehensive.get(col, pd.Series([0])).sum() for col in tool_cols)
-            st.metric("Total Assessments", int(total_assessments))
+            st.metric("Tools Active", int((df_summary['Total Entries'] > 0).sum()))
     else:
-        st.info("No comprehensive data available yet.")
+        st.info("No data available yet.")
 
 # Global therapist selection
 therapist_list = get_therapist_list(clients_df)
@@ -196,12 +171,9 @@ if available_tools:
                 st.warning(f"No data available for {tool_name}")
                 continue
             
-            # Filter by therapist if needed
-            if "Client Code" in tool_df.columns and selected_therapist != "All":
-                client_ids_for_therapist = clients_df[
-                    clients_df['Counsellor Assn`'] == selected_therapist
-                ]['ID'].unique()
-                tool_df = tool_df[tool_df['Client Code'].isin(client_ids_for_therapist)]
+            # Filter by therapist using the pre-joined 'therapist' column
+            if selected_therapist != "All" and 'therapist' in tool_df.columns:
+                tool_df = tool_df[tool_df['therapist'] == selected_therapist]
             
             if tool_df.empty:
                 st.info(f"No data for {selected_therapist} on this tool")
@@ -236,21 +208,24 @@ if available_tools:
                     st.info("No data for selected filter")
                     continue
                 
-                # Add session numbers
-                viz_df['Session'] = viz_df.groupby('Client Code').cumcount() + 1
-                
+                # Use entry_number directly — computed on the full unfiltered sheet at
+                # load time, so position is always relative to the client's complete
+                # history, not just the currently visible subset.
+                viz_df = viz_df.sort_values(['Client Code', 'entry_number'])
+                viz_df['data entry point'] = viz_df['entry_number']
+
                 # Create Plotly figure
                 fig = go.Figure()
                 
                 # Add severity range backgrounds
                 severity_ranges = get_severity_ranges(tool_name)
                 if severity_ranges:
-                    max_session = viz_df['Session'].max()
+                    max_entry = viz_df['data entry point'].max()
                     for severity_name, (min_val, max_val, color) in severity_ranges.items():
                         fig.add_shape(
                             type="rect",
                             x0=0.5,
-                            x1=max_session + 0.5,
+                            x1=max_entry + 0.5,
                             y0=min_val,
                             y1=max_val,
                             fillcolor=color,
@@ -260,7 +235,7 @@ if available_tools:
                         )
                         # Add label
                         fig.add_annotation(
-                            x=max_session + 0.7,
+                            x=max_entry + 0.7,
                             y=(min_val + max_val) / 2,
                             text=severity_name,
                             showarrow=False,
@@ -275,38 +250,38 @@ if available_tools:
                 clients = viz_df['Client Code'].unique()
                 
                 for i, client in enumerate(clients):
-                    client_data = viz_df[viz_df['Client Code'] == client].sort_values('Session')
+                    client_data = viz_df[viz_df['Client Code'] == client].sort_values('data entry point')
                     if not client_data.empty:
                         fig.add_trace(
                             go.Scatter(
-                                x=client_data['Session'],
+                                x=client_data['data entry point'],
                                 y=client_data[score_col],
                                 mode='lines+markers',
                                 name=str(client),
                                 line=dict(width=2, color=colors[i % len(colors)]),
                                 marker=dict(size=8),
-                                hovertemplate=f"<b>Client:</b> {client}<br><b>Session:</b> %{{x}}<br><b>{score_col}:</b> %{{y}}<extra></extra>",
+                                hovertemplate=f"<b>Client:</b> {client}<br><b>Data Entry Point:</b> %{{x}}<br><b>{score_col}:</b> %{{y}}<extra></extra>",
                             )
                         )
                 
                 # Add average trajectory if multiple clients
                 if len(clients) > 1:
-                    avg_trajectory = viz_df.groupby('Session')[score_col].mean().reset_index()
+                    avg_trajectory = viz_df.groupby('data entry point')[score_col].mean().reset_index()
                     fig.add_trace(
                         go.Scatter(
-                            x=avg_trajectory['Session'],
+                            x=avg_trajectory['data entry point'],
                             y=avg_trajectory[score_col],
                             mode='lines+markers',
                             name='Average',
                             line=dict(width=4, color='grey', dash='dot'),
                             marker=dict(size=12, color='grey'),
-                            hovertemplate=f"<b>Average</b><br><b>Session:</b> %{{x}}<br><b>{score_col}:</b> %{{y:.1f}}<extra></extra>",
+                            hovertemplate=f"<b>Average</b><br><b>Data Entry Point:</b> %{{x}}<br><b>{score_col}:</b> %{{y:.1f}}<extra></extra>",
                         )
                     )
                 
                 fig.update_layout(
                     title=f"{score_col} Trajectories - {selected_therapist}" if not focus_on_client else f"{score_col} - Client {selected_client_focus}",
-                    xaxis_title="Session Number",
+                    xaxis_title="Data Entry Point",
                     yaxis_title=f"{score_col} Score",
                     hovermode='closest',
                     height=700,
@@ -325,12 +300,12 @@ if available_tools:
                 
                 # Display summary stats
                 if len(clients) > 1:
-                    avg_trajectory = viz_df.groupby('Session')[score_col].mean().reset_index()
+                    avg_trajectory = viz_df.groupby('data entry point')[score_col].mean().reset_index()
                     col1, col2, col3 = st.columns(3)
                     with col1:
                         st.metric("Number of Clients", len(clients))
                     with col2:
-                        st.metric("Sessions Completed", viz_df['Session'].max())
+                        st.metric("Data Entry Points", viz_df['data entry point'].max())
                     with col3:
                         if len(avg_trajectory) > 1:
                             improvement = avg_trajectory.iloc[-1][score_col] - avg_trajectory.iloc[0][score_col]
@@ -339,6 +314,14 @@ if available_tools:
             # Display raw data
             st.subheader("Raw Data")
             st.dataframe(tool_df, width="stretch")
+
+            # Flag submissions from the same client within 24 hours of each other
+            from sheets_data import get_duplicate_submissions
+            review_df = get_duplicate_submissions(tool_df)
+            if not review_df.empty:
+                with st.expander(f"⚠️ Review: {len(review_df)} submission(s) less than 24h apart", expanded=False):
+                    st.caption("These rows share a client code with another submission within 24 hours. Please verify they are intentional.")
+                    st.dataframe(review_df, width="stretch")
 
 else:
     st.info("No assessment tools found in data")

@@ -26,6 +26,9 @@ Thumbs.db
 *.ipynb
 deploy.md
 
+# Test folder
+test/
+
 # Environment files
 .env
 
