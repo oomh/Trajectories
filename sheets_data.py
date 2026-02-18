@@ -137,6 +137,131 @@ def get_tool_summary_counts(all_sheets):
     return results
 
 
+# ---------------------------------------------------------------------------
+# Full-name lookup for each assessment tool
+# ---------------------------------------------------------------------------
+TOOL_FULL_NAMES = {
+    "EPDS":  "Edinburgh Postnatal Depression Scale (EPDS)",
+    "BDI":   "Beck's Depression Inventory (BDI)",
+    "BAI":   "Beck's Anxiety Inventory (BAI)",
+    "ACE-Q": "Adverse Childhood Experiences Questionnaire (ACE-Q)",
+    "SADS":  "Social Avoidance and Distress Scale (SADS)",
+    "ASRS":  "Adult ADHD Self-Report Scale v1.1 (ASRS)",
+}
+
+
+def _short_key(tool_name: str) -> str:
+    """Return the canonical short key for a tool sheet name."""
+    for key in TOOL_FULL_NAMES:
+        if key in tool_name:
+            return key
+    return tool_name[:10]
+
+
+def _score_col_for(tool_name: str, df: pd.DataFrame):
+    """Return the primary score column name for a given tool sheet, or None."""
+    candidates = {
+        "EPDS": "EPDS Total Score (Max 30)",
+        "BDI":  "BDI Total",
+        "BAI":  "Total Score",
+        "ACE-Q": "Total ACE Score",
+        "SADS": "Total SADS Score",
+        "ASRS": "Total Score",
+    }
+    for key, col in candidates.items():
+        if key in tool_name and col in df.columns:
+            return col
+    return None
+
+
+def get_global_summary(all_sheets):
+    """
+    Compute cross-tool and per-tool summary statistics.
+
+    Returns a dict with:
+        'global_unique_clients' : int  – unique Client Codes across all tool sheets
+        'tools'                 : list of dicts, one per tool, each containing:
+            'short_name'         : str
+            'full_name'          : str
+            'total_clients'      : int  – unique Client Codes in this tool sheet
+            'one_timepoint'      : int  – clients with exactly 1 submission
+            'multi_assessment'   : int  – clients with > 1 submission
+            'avg_change_pct'     : float | None  – average % change from first→last score
+    """
+    tools = get_available_tools(all_sheets)
+
+    all_client_codes: set = set()
+    tool_stats = []
+
+    for tool_name in tools:
+        df = all_sheets.get(tool_name, pd.DataFrame())
+
+        if df.empty or "Client Code" not in df.columns:
+            short = _short_key(tool_name)
+            tool_stats.append({
+                "short_name": short,
+                "full_name": TOOL_FULL_NAMES.get(short, tool_name),
+                "total_clients": 0,
+                "one_timepoint": 0,
+                "multi_assessment": 0,
+                "avg_change_pct": None,
+            })
+            continue
+
+        codes = df["Client Code"].dropna()
+        all_client_codes.update(codes.tolist())
+
+        counts_per_client = codes.value_counts()
+        one_tp = int((counts_per_client == 1).sum())
+        multi = int((counts_per_client > 1).sum())
+        total = int(counts_per_client.shape[0])
+
+        # Average % change (first → last score for clients with ≥2 points)
+        score_col = _score_col_for(tool_name, df)
+        avg_change_pct = None
+        if score_col:
+            df_score = df.copy()
+            df_score[score_col] = pd.to_numeric(df_score[score_col], errors="coerce")
+            df_score = df_score.dropna(subset=[score_col, "Client Code"])
+
+            # Use entry_number if available, otherwise fall back to row order
+            sort_col = "entry_number" if "entry_number" in df_score.columns else df_score.index.name or "index"
+            if sort_col == "index":
+                df_score = df_score.reset_index()
+
+            df_score = df_score.sort_values(["Client Code", sort_col])
+
+            first_scores = df_score.groupby("Client Code")[score_col].first()
+            last_scores  = df_score.groupby("Client Code")[score_col].last()
+
+            # Only consider clients who have at least 2 data points
+            clients_multi = counts_per_client[counts_per_client > 1].index
+            first_m = first_scores.loc[first_scores.index.isin(clients_multi)]
+            last_m  = last_scores.loc[last_scores.index.isin(clients_multi)]
+
+            if not first_m.empty:
+                # Avoid division-by-zero; drop zeros
+                mask = first_m != 0
+                if mask.any():
+                    pct_changes = ((last_m[mask] - first_m[mask]) / first_m[mask] * 100)
+                    avg_change_pct = float(pct_changes.mean())
+
+        short = _short_key(tool_name)
+        tool_stats.append({
+            "short_name": short,
+            "full_name": TOOL_FULL_NAMES.get(short, tool_name),
+            "total_clients": total,
+            "one_timepoint": one_tp,
+            "multi_assessment": multi,
+            "avg_change_pct": avg_change_pct,
+        })
+
+    return {
+        "global_unique_clients": len(all_client_codes),
+        "tools": tool_stats,
+    }
+
+
 def get_client_trajectory_data(all_sheets, client_code, tool_name):
     """Get trajectory data for a specific client and tool"""
     tool_df = all_sheets.get(tool_name, pd.DataFrame())
@@ -161,32 +286,4 @@ def get_client_trajectory_data(all_sheets, client_code, tool_name):
     return client_data
 
 
-def get_duplicate_submissions(tool_df):
-    """Return rows where the same client has two or more submissions
-    within 24 hours of each other. The returned DataFrame includes both
-    rows of each offending pair so reviewers have full context."""
-    if tool_df.empty or 'Timestamp' not in tool_df.columns or 'Client Code' not in tool_df.columns:
-        return pd.DataFrame()
 
-    df = tool_df.copy()
-    df['Timestamp'] = pd.to_datetime(df['Timestamp'], errors='coerce')
-    df = df.dropna(subset=['Timestamp'])
-
-    flagged_indices = set()
-
-    for client, group in df.groupby('Client Code'):
-        timestamps = group['Timestamp'].sort_values()
-        # Compare each submission to the next one
-        diffs = timestamps.diff().abs()
-        close = diffs[diffs < pd.Timedelta(hours=24)]
-        for idx in close.index:
-            # Flag both the current row and the one before it
-            pos = timestamps.index.get_loc(idx)
-            flagged_indices.add(idx)
-            if pos > 0:
-                flagged_indices.add(timestamps.index[pos - 1])
-
-    if not flagged_indices:
-        return pd.DataFrame()
-
-    return df.loc[sorted(flagged_indices)].reset_index(drop=True)

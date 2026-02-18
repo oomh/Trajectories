@@ -14,6 +14,8 @@ from sheets_data import (
     get_clients_for_therapist,
     get_tool_summary_counts
 )
+from summary import render_summary
+from checks import render_close_submissions
 
 st.set_page_config(page_title="Therapist Dashboard", layout="wide")
 
@@ -33,37 +35,8 @@ with st.spinner("Loading data from Google Sheets..."):
 clients_df = all_sheets.get("Clients", pd.DataFrame())
 available_tools = get_available_tools(all_sheets)
 
-# Display response count cards in a grid
-st.subheader("Assessment Response Counts")
-cols = st.columns(min(3, len(available_tools)))
-
-for idx, tool_name in enumerate(available_tools):
-    tool_df = all_sheets.get(tool_name, pd.DataFrame())
-    response_count = len(tool_df)
-    
-    # Extract short tool name
-    if 'EPDS' in tool_name:
-        short_name = "EPDS"
-    elif 'BDI' in tool_name:
-        short_name = "BDI"
-    elif 'BAI' in tool_name:
-        short_name = "BAI"
-    elif 'ACE-Q' in tool_name:
-        short_name = "ACE-Q"
-    elif 'SADS' in tool_name:
-        short_name = "SADS"
-    elif 'ASRS' in tool_name:
-        short_name = "ASRS"
-    else:
-        short_name = tool_name[:10]
-    
-    with cols[idx % len(cols)]:
-        st.metric(
-            short_name,
-            response_count,
-            delta=None,
-            help=tool_name
-        )
+# ── Summary section ──────────────────────────────────────────────────────────
+render_summary(all_sheets)
 
 st.divider()
 
@@ -112,30 +85,8 @@ def get_severity_ranges(tool_name):
     return {}
 
 
-# Display comprehensive tool breakdown
-with st.expander("View detailed counts per assessment tool"):
-    from sheets_data import get_tool_summary_counts
-    tool_summary = get_tool_summary_counts(all_sheets)
-
-    if tool_summary:
-        df_summary = pd.DataFrame(tool_summary).rename(columns={
-            'tool': 'Tool',
-            'total_entries': 'Total Entries',
-            'unique_clients': 'Unique Clients',
-        })
-        st.dataframe(df_summary, width="stretch", hide_index=True)
-
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.metric("Total Entries (all tools)", int(df_summary['Total Entries'].sum()))
-        with col2:
-            st.metric("Unique Clients (all tools)", int(df_summary['Unique Clients'].max()))
-        with col3:
-            st.metric("Tools Active", int((df_summary['Total Entries'] > 0).sum()))
-    else:
-        st.info("No data available yet.")
-
 # Global therapist selection
+st.title("Therapist Filter")
 therapist_list = get_therapist_list(clients_df)
 selected_therapist = st.selectbox(
     "Select Therapist (applies to all tools)",
@@ -301,7 +252,7 @@ if available_tools:
                 # Display summary stats
                 if len(clients) > 1:
                     avg_trajectory = viz_df.groupby('data entry point')[score_col].mean().reset_index()
-                    col1, col2, col3 = st.columns(3)
+                    col1, col2, col3, col4 = st.columns(4)
                     with col1:
                         st.metric("Number of Clients", len(clients))
                     with col2:
@@ -309,19 +260,71 @@ if available_tools:
                     with col3:
                         if len(avg_trajectory) > 1:
                             improvement = avg_trajectory.iloc[-1][score_col] - avg_trajectory.iloc[0][score_col]
-                            st.metric("Avg Change", f"{improvement:.1f}")
+                            st.metric("Avg Score Change", f"{improvement:+.1f}")
+                    with col4:
+                        # Average % change across clients with ≥2 data points
+                        multi_clients = (
+                            viz_df.groupby('Client Code')['data entry point']
+                            .nunique()
+                        )
+                        multi_clients = multi_clients[multi_clients > 1].index
+                        if len(multi_clients) > 0:
+                            first_scores = (
+                                viz_df[viz_df['Client Code'].isin(multi_clients)]
+                                .groupby('Client Code')[score_col].first()
+                            )
+                            last_scores = (
+                                viz_df[viz_df['Client Code'].isin(multi_clients)]
+                                .groupby('Client Code')[score_col].last()
+                            )
+                            mask = first_scores != 0
+                            if mask.any():
+                                pct_changes = (
+                                    (last_scores[mask] - first_scores[mask])
+                                    / first_scores[mask] * 100
+                                )
+                                avg_pct = pct_changes.mean()
+                                st.metric(
+                                    "Avg Change (%)",
+                                    f"{avg_pct:+.1f}%",
+                                    delta=f"{avg_pct:+.1f}%",
+                                    delta_color="inverse",
+                                    help="Average % change from first to last score for clients with ≥2 assessments. Negative = improvement.",
+                                )
+                            else:
+                                st.metric("Avg Change (%)", "N/A")
+                        else:
+                            st.metric("Avg Change (%)", "N/A")
+                elif len(clients) == 1:
+                    # Single-client focus mode — show that client's own % change
+                    client_data = viz_df.sort_values('data entry point')
+                    col1, col2, col3 = st.columns(3)
+                    with col1:
+                        st.metric("Data Entry Points", viz_df['data entry point'].max())
+                    with col2:
+                        if len(client_data) > 1:
+                            raw_change = client_data.iloc[-1][score_col] - client_data.iloc[0][score_col]
+                            st.metric("Score Change", f"{raw_change:+.1f}")
+                    with col3:
+                        if len(client_data) > 1 and client_data.iloc[0][score_col] != 0:
+                            pct = (
+                                (client_data.iloc[-1][score_col] - client_data.iloc[0][score_col])
+                                / client_data.iloc[0][score_col] * 100
+                            )
+                            st.metric(
+                                "Change (%)",
+                                f"{pct:+.1f}%",
+                                delta=f"{pct:+.1f}%",
+                                delta_color="inverse",
+                                help="% change from first to last assessment. Negative = improvement.",
+                            )
             
+            # ── Check: submissions less than 24 h apart ──────────────────
+            render_close_submissions(tool_df)
+
             # Display raw data
             st.subheader("Raw Data")
             st.dataframe(tool_df, width="stretch")
-
-            # Flag submissions from the same client within 24 hours of each other
-            from sheets_data import get_duplicate_submissions
-            review_df = get_duplicate_submissions(tool_df)
-            if not review_df.empty:
-                with st.expander(f"⚠️ Review: {len(review_df)} submission(s) less than 24h apart", expanded=False):
-                    st.caption("These rows share a client code with another submission within 24 hours. Please verify they are intentional.")
-                    st.dataframe(review_df, width="stretch")
 
 else:
     st.info("No assessment tools found in data")
